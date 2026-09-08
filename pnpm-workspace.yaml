@@ -1,0 +1,3 @@
+# Vite uses the platform-specific optional esbuild package; no install scripts required.
+allowBuilds:
+  esbuild: false
