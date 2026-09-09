@@ -68,3 +68,24 @@ Third-party package licences remain with their respective authors.
 ## Deployment scope
 
 This project is independent of the original ChatGPT Sites deployment. There are no Sites credentials or configuration in this repository. Publishing this project does not modify that deployment or any other GitHub repository.
+
+## Ridge regression tab
+
+Separate fixed-cohort models of 2024/25 TP01 for LCRA and LCHO use log10 tenure-specific owned homes, applicable other TP scores, and reference-coded region (London baseline). The atlas filters do not affect these national models. LCHO excludes inapplicable TP02–TP04. Complete cases: 189 LCRA providers and 53 LCHO providers.
+
+All predictor columns are standardized inside each training fold. Ridge includes an unpenalized intercept. Alpha is tuned over 29 logarithmic values from 0.001 to 10,000 by inner five-fold CV. Outer five-fold predictions provide held-out R², RMSE and MAE. A separately tuned full-cohort fit supplies coefficients and partial-residual plots. Numeric coefficients are TP01 percentage points per cohort SD; region coefficients are differences from London. Group-removal comparisons retune their reduced models inside the same outer folds.
+
+The UI includes coefficient rankings, actual/predicted scatter, a selectable partial-residual plot, regional contrasts, residual histograms and a tuning curve. These are conditional provider-level associations, not causal effects or significance tests.
+
+To rebuild the models after changing the source data:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r scripts/regression-requirements.txt
+.venv/bin/python scripts/fit-regression.py
+.venv/bin/python scripts/check-regression.py
+pnpm test
+pnpm build
+```
+
+Commit the regenerated `public/regression.json` alongside data changes. Tests reject a stale source-data checksum and validate fold partitions, coefficient algebra and reported metrics. Model fitting runs locally, not in visitors' browsers. No Python runtime is required to host the site.

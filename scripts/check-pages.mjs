@@ -22,6 +22,7 @@ try{
  assert.match(html,/<div id="root"><\/div>/);
  const urls=[...html.matchAll(/(?:src|href)="([^"#]+)"/g)].map(m=>new URL(m[1],base));
  urls.push(new URL('housing.json',base));
+ urls.push(new URL('regression.json',base));
  for(const url of urls){const r=await fetch(url);assert.equal(r.status,200,url.href);assert.ok(url.pathname.startsWith('/housing-atlas/'));}
  const cssURL=new URL('fonts/nunito.css',base);const css=await(await fetch(cssURL)).text();
  for(const [,font] of css.matchAll(/url\(([^)]+)\)/g)){const r=await fetch(new URL(font,cssURL));assert.equal(r.status,200,font);}
