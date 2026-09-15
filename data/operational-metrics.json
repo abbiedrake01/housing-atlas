@@ -1,0 +1,86 @@
+[
+  {
+    "key": "RP01",
+    "label": "Homes failing Decent Homes Standard",
+    "unit": "%",
+    "scope": "LCRA"
+  },
+  {
+    "key": "RP02_1",
+    "label": "Non-emergency repairs within target",
+    "unit": "%",
+    "scope": "LCRA"
+  },
+  {
+    "key": "RP02_2",
+    "label": "Emergency repairs within target",
+    "unit": "%",
+    "scope": "LCRA"
+  },
+  {
+    "key": "CH01_1",
+    "label": "Stage 1 complaints",
+    "unit": "per 1,000 homes",
+    "scope": "tenure"
+  },
+  {
+    "key": "CH01_2",
+    "label": "Stage 2 complaints",
+    "unit": "per 1,000 homes",
+    "scope": "tenure"
+  },
+  {
+    "key": "CH02_1",
+    "label": "Stage 1 complaints answered on time",
+    "unit": "%",
+    "scope": "tenure"
+  },
+  {
+    "key": "CH02_2",
+    "label": "Stage 2 complaints answered on time",
+    "unit": "%",
+    "scope": "tenure"
+  },
+  {
+    "key": "BS01",
+    "label": "Gas safety checks",
+    "unit": "%",
+    "scope": "combined"
+  },
+  {
+    "key": "BS02",
+    "label": "Fire risk assessments",
+    "unit": "%",
+    "scope": "combined"
+  },
+  {
+    "key": "BS03",
+    "label": "Asbestos checks",
+    "unit": "%",
+    "scope": "combined"
+  },
+  {
+    "key": "BS04",
+    "label": "Legionella risk assessments",
+    "unit": "%",
+    "scope": "combined"
+  },
+  {
+    "key": "BS05",
+    "label": "Lift safety checks",
+    "unit": "%",
+    "scope": "combined"
+  },
+  {
+    "key": "NM01_1",
+    "label": "ASB cases opened",
+    "unit": "per 1,000 homes",
+    "scope": "combined"
+  },
+  {
+    "key": "NM01_2",
+    "label": "ASB cases involving hate incidents",
+    "unit": "per 1,000 homes",
+    "scope": "combined"
+  }
+]

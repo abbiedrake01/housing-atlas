@@ -8,7 +8,8 @@ An interactive UK basemap showing England's non-profit housing associations, the
 - Individual association selection, region, stock size and weekly rental rent filters.
 - Separate LCRA (rental) and LCHO (ownership) views; all-homes mode keeps LCRA satisfaction scores.
 - TP01–TP12 scores, year-on-year percentage-point changes, and a filter for the displayed value.
-- Pearson correlations with TP01 across the filtered cohort.
+- Operational RP, CH, BS and NM measures, with original units, YoY changes and value filters.
+- Pearson/Spearman correlation explorer with pair selection, scatterplots, ranked relationships and a clickable matrix across the filtered cohort.
 - An Abri-inspired palette with self-hosted Nunito Sans. This is an independent project, not an Abri service.
 
 ## Run locally
@@ -54,7 +55,7 @@ Only non-profit private registered providers are included; councils and for-prof
 
 LCRA and LCHO stocks reconcile to the all-homes totals. Managed-only stock is excluded. One displayed house represents up to 2,000 owned units/bedspaces, rounded up. Local-authority shading represents reported stock presence, not precise property locations or a continuous service boundary. Clusters are displaced slightly for legibility from stock-weighted geographic centroids.
 
-TP02–TP04 are not applicable to LCHO. Missing/suppressed data remains missing. YoY matches registration codes without adjustment for mergers, tenant mix or survey methods. Correlations are unweighted, provider-level, pairwise complete Pearson coefficients with at least three observations; they are not causal effects. Rent is a stock-weighted general-needs net social rental rent, excluding service charges, Affordable Rent, intermediate rent and HIST. It does not apply to the LCHO view.
+TP02–TP04 are not applicable to LCHO. Missing/suppressed data remains missing. YoY matches registration codes without adjustment for mergers, tenant mix or survey methods. Correlations are unweighted, provider-level, pairwise complete Pearson or Spearman coefficients with at least three observations; they are not causal effects. Rent is a stock-weighted general-needs net social rental rent, excluding service charges, Affordable Rent, intermediate rent and HIST. It does not apply to the LCHO view.
 
 See **About the data** in the app for further details.
 
@@ -71,7 +72,7 @@ This project is independent of the original ChatGPT Sites deployment. There are 
 
 ## Ridge regression tab
 
-Separate fixed-cohort models of 2024/25 TP01 for LCRA and LCHO use log10 tenure-specific owned homes, applicable other TP scores, and reference-coded region (London baseline). The atlas filters do not affect these national models. LCHO excludes inapplicable TP02–TP04. Complete cases: 189 LCRA providers and 53 LCHO providers.
+Separate fixed-cohort models of 2024/25 TP01 for LCRA and LCHO use log10 tenure-specific owned homes, either applicable other TP scores or operational TSMs, and reference-coded region (London baseline). The atlas filters do not affect these national models. LCHO excludes inapplicable TP02–TP04. Satisfaction models use 189 LCRA and 53 LCHO complete cases. Operational models use 185 LCRA and 53 LCHO complete cases. The operational specification omits TP02–TP12; it estimates operational associations conditional on the other operational measures, size and region. Families can have different complete-case cohorts, so the difference in predictive performance is not a controlled feature-set comparison.
 
 All predictor columns are standardized inside each training fold. Ridge includes an unpenalized intercept. Alpha is tuned over 29 logarithmic values from 0.001 to 10,000 by inner five-fold CV. Outer five-fold predictions provide held-out R², RMSE and MAE. A separately tuned full-cohort fit supplies coefficients and partial-residual plots. Numeric coefficients are TP01 percentage points per cohort SD; region coefficients are differences from London. Group-removal comparisons retune their reduced models inside the same outer folds.
 
@@ -89,3 +90,26 @@ pnpm build
 ```
 
 Commit the regenerated `public/regression.json` alongside data changes. Tests reject a stale source-data checksum and validate fold partitions, coefficient algebra and reported metrics. Model fitting runs locally, not in visitors' browsers. No Python runtime is required to host the site.
+
+## Operational data
+
+`data/operational-metrics.json` defines all 14 operational components in the 2024/25 snapshot:
+
+- RP01: homes failing Decent Homes Standard (%); RP02_1/_2: non-emergency/emergency repairs within provider targets (%), **LCRA only**.
+- CH01_1/_2: stage 1/2 complaints per 1,000 homes; CH02_1/_2: stage 1/2 responses within Complaint Handling Code timescales (%), **tenure-specific**.
+- BS01–BS05: required gas, fire, asbestos, legionella and lift checks (%); NM01_1/_2: ASB cases/hate incidents per 1,000 homes, **combined LCRA + LCHO**.
+
+All-homes mode retains LCRA RP/CH values and combined BS/NM values. Combined complaints are never substituted for missing tenure-specific complaints. Missing/suppressed/inapplicable values remain null, not zero. Operational map colours encode magnitude rather than a performance rating; higher complaint or ASB reporting is not automatically worse performance. Rates may exceed 100. YoY rates are differences per 1,000 homes, whereas percentage changes are in percentage points. CH02 comparisons may be affected by Complaint Handling Code changes; RP02 uses each landlord's own target. Newer measures outside the 2024/25 specification are not backfilled.
+
+Values are joined to existing atlas reporting groups by exact registration code, without aggregating member rates. 193 atlas providers match a published management-information record. Source URLs and input SHA-256 hashes are embedded under `operationalSource` in `public/housing.json`.
+
+To reproduce ingestion, download the [2025 full-data ZIP](https://assets.publishing.service.gov.uk/media/6939474f7a605b2d61cd901a/TSM_2025_Full_Data.zip), extract `TSM_2025_Full_Data - File 04 - Management_info.csv`, and download the [2024 v2.1 workbook](https://assets.publishing.service.gov.uk/media/69394574e447374889cd9004/2024_TSM_Full_Data_v2.1_FINAL.xlsx). With `openpyxl==3.1.5` installed:
+
+```sh
+python scripts/import-operational.py --current /path/to/management.csv --previous /path/to/2024.xlsx
+python scripts/fit-regression.py
+python scripts/check-regression.py
+pnpm test
+```
+
+The correlation explorer always uses current-year levels and all current explorer filters (including a selected value/YoY range). It ranks absolute correlations, handles Spearman ties with average ranks, and reports each pair's sample size. Its plotted line is unadjusted OLS in raw units even when Spearman is selected. Sparse/constant pairs have no coefficient. Multiple comparisons and complete-case selection are exploratory, with no causal or inferential claims.

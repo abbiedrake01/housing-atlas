@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import numpy as np
 r=json.loads((Path(__file__).resolve().parents[1]/'public/regression.json').read_text())
-for name,m in r['models'].items():
+for name,m in list(r['models'].items())+[(t+' operational',m) for t,m in r['operationalModels'].items()]:
     points={p['id']:p for p in m['points']}
     for fold in m['folds']:
         train=[points[i] for i in fold['trainIds']];test=[points[i] for i in fold['testIds']]

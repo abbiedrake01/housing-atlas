@@ -28,14 +28,18 @@ def tune(x,y,seed):
 def metrics(y,p):
     return {'rmse':float(np.sqrt(mean_squared_error(y,p))),'mae':float(mean_absolute_error(y,p)),'r2':float(r2_score(y,p))}
 
-def fit(providers,tenure):
+def fit(providers,tenure,family="satisfaction"):
+    operational=json.loads((ROOT/"data/operational-metrics.json").read_text())
+    ops=[m for m in operational if tenure!="LCHO" or m["scope"]!="LCRA"]
     indices=list(range(1,12)) if tenure=='LCRA' else list(range(4,12))
     eligible=[p for p in providers if p['tenures'][tenure]['stock']>0 and p['tenures'][tenure]['scores'][0] is not None]
-    cohort=[p for p in eligible if all(p['tenures'][tenure]['scores'][i] is not None for i in indices) and p['region'] in REGIONS]
+    def values(p):
+        return [p['tenures'][tenure]['scores'][i] for i in indices] if family=='satisfaction' else [p['operational'][tenure]['values'][m['key']] for m in ops]
+    cohort=[p for p in eligible if all(v is not None for v in values(p)) and p['region'] in REGIONS]
     cohort.sort(key=lambda p:p['id'])
-    excluded=[{'id':p['id'],'name':p['name'],'reason':'Missing applicable TP predictor or known region'} for p in eligible if p not in cohort]
-    features=[{'key':'size','label':'Association size (log₁₀ homes)','kind':'numeric','group':'Size'}]+[{'key':f'TP{i+1:02d}','label':LABELS[i],'kind':'numeric','group':'Tenant measures'} for i in indices]+[{'key':'region_'+r,'label':r,'kind':'region','group':'Region'} for r in REGIONS[1:]]
-    x=np.array([[np.log10(p['tenures'][tenure]['stock'])]+[p['tenures'][tenure]['scores'][i] for i in indices]+[float(p['region']==r) for r in REGIONS[1:]] for p in cohort])
+    excluded=[{'id':p['id'],'name':p['name'],'reason':'Missing applicable predictor or known region'} for p in eligible if p not in cohort]
+    features=[{'key':'size','label':'Association size (log₁₀ homes)','kind':'numeric','group':'Size'}]+([{'key':f'TP{i+1:02d}','label':LABELS[i],'unit':'%','kind':'numeric','group':'Tenant measures'} for i in indices] if family=='satisfaction' else [{**m,'kind':'numeric','group':'Operational measures'} for m in ops])+[{'key':'region_'+r,'label':r,'kind':'region','group':'Region'} for r in REGIONS[1:]]
+    x=np.array([[np.log10(p['tenures'][tenure]['stock'])]+values(p)+[float(p['region']==r) for r in REGIONS[1:]] for p in cohort])
     y=np.array([p['tenures'][tenure]['scores'][0] for p in cohort])
     assert np.isfinite(x).all() and np.isfinite(y).all()
     assert all(f['key']!='TP01' for f in features)
@@ -56,7 +60,7 @@ def fit(providers,tenure):
         fold_effects=[float(c[k]*factor) for c in fold_coefficients]
         f.update({'coefficient':float(raw[k]*factor),'rawCoefficient':float(raw[k]),'mean':float(scaler.mean_[k]),'sd':float(scaler.scale_[k]),'foldMin':min(fold_effects),'foldMax':max(fold_effects),'foldCoefficients':fold_effects})
     ablations=[]
-    for group in ['Size','Region','Tenant measures']:
+    for group in ['Size','Region','Tenant measures' if family=='satisfaction' else 'Operational measures']:
         keep=[i for i,f in enumerate(features) if f['group']!=group]
         reduced=np.full(len(y),np.nan)
         for fold,(train,test) in enumerate(outer):
@@ -67,12 +71,12 @@ def fit(providers,tenure):
         points.append({'id':p['id'],'name':p['name'],'region':p['region'],'stock':p['tenures'][tenure]['stock'],'actual':float(y[i]),'predicted':float(oof[i]),'fitted':float(full_pred[i]),'residual':float(y[i]-oof[i]),'fold':int(fold_ids[i]),'x':[float(v) for v in x[i]]})
     cv=final.cv_results_
     curve=[{'alpha':float(a),'logAlpha':float(np.log10(a)),'rmse':float(np.sqrt(-m))} for a,m in zip(ALPHAS,cv['mean_test_score'])]
-    return {'tenure':tenure,'n':len(cohort),'eligible':len(eligible),'excluded':excluded,'featureCount':len(features),'alpha':float(final.best_params_['ridge__alpha']),'alphaAtBoundary':bool(final.best_params_['ridge__alpha'] in (ALPHAS[0],ALPHAS[-1])),'referenceRegion':'London','regionCounts':{r:sum(p['region']==r for p in cohort) for r in REGIONS},'targetMean':float(np.mean(y)),'intercept':float(ridge.intercept_),'rawIntercept':float(ridge.intercept_-np.dot(raw,scaler.mean_)),'metrics':metrics(y,oof),'baseline':metrics(y,baseline),'trainingMetrics':metrics(y,full_pred),'features':features,'points':points,'folds':folds,'curve':curve,'ablations':ablations}
+    return {'family':family,'tenure':tenure,'n':len(cohort),'eligible':len(eligible),'excluded':excluded,'featureCount':len(features),'alpha':float(final.best_params_['ridge__alpha']),'alphaAtBoundary':bool(final.best_params_['ridge__alpha'] in (ALPHAS[0],ALPHAS[-1])),'referenceRegion':'London','regionCounts':{r:sum(p['region']==r for p in cohort) for r in REGIONS},'targetMean':float(np.mean(y)),'intercept':float(ridge.intercept_),'rawIntercept':float(ridge.intercept_-np.dot(raw,scaler.mean_)),'metrics':metrics(y,oof),'baseline':metrics(y,baseline),'trainingMetrics':metrics(y,full_pred),'features':features,'points':points,'folds':folds,'curve':curve,'ablations':ablations}
 
 if __name__=='__main__':
     source=SOURCE.read_bytes();providers=json.loads(source)['providers']
-    result={'schemaVersion':1,'sourceSha256':hashlib.sha256(source).hexdigest(),'dataYear':'2024/25','method':{'estimator':'Ridge','objective':'sum squared residuals + alpha * sum squared coefficients; intercept unpenalized','preprocessing':'log10 tenure stock; reference-coded region (London); all feature columns standardized within each training fold','validation':'5-fold outer CV; 5-fold inner CV selects alpha by mean squared error; final alpha selected by independent seeded 5-fold CV on all eligible complete cases','outerSeed':20260909,'finalSeed':42,'alphas':ALPHAS.tolist(),'versions':{'numpy':np.__version__,'scikitLearn':sklearn.__version__}},'models':{t:fit(providers,t) for t in ['LCRA','LCHO']}}
+    result={'schemaVersion':1,'sourceSha256':hashlib.sha256(source).hexdigest(),'dataYear':'2024/25','method':{'estimator':'Ridge','objective':'sum squared residuals + alpha * sum squared coefficients; intercept unpenalized','preprocessing':'log10 tenure stock; reference-coded region (London); all feature columns standardized within each training fold','validation':'5-fold outer CV; 5-fold inner CV selects alpha by mean squared error; final alpha selected by independent seeded 5-fold CV on all eligible complete cases','outerSeed':20260909,'finalSeed':42,'alphas':ALPHAS.tolist(),'versions':{'numpy':np.__version__,'scikitLearn':sklearn.__version__}},'models':{t:fit(providers,t) for t in ['LCRA','LCHO']},'operationalModels':{t:fit(providers,t,'operational') for t in ['LCRA','LCHO']}}
     (ROOT/'public/regression.json').write_text(json.dumps(result,separators=(',',':'),allow_nan=False)+'\n')
-    for t,m in result['models'].items():
+    for t,m in list(result['models'].items())+[(t+' operational',m) for t,m in result['operationalModels'].items()]:
         print(t,'n',m['n'],'alpha',m['alpha'],'OOF',m['metrics'],'baseline',m['baseline'])
         print('Top numeric',[(f['key'],round(f['coefficient'],2)) for f in sorted([f for f in m['features'] if f['kind']=='numeric'],key=lambda f:-abs(f['coefficient']))[:3]])
