@@ -113,3 +113,24 @@ pnpm test
 ```
 
 The correlation explorer always uses current-year levels and all current explorer filters (including a selected value/YoY range). It ranks absolute correlations, handles Spearman ties with average ranks, and reports each pair's sample size. Its plotted line is unadjusted OLS in raw units even when Spearman is selected. Sparse/constant pairs have no coefficient. Multiple comparisons and complete-case selection are exploratory, with no causal or inferential claims.
+
+## Annual data selector
+
+The header's **Data year** selector defaults to 2025/26 and retains the original 2024/25 snapshot. Switching year resets filters and selections and switches stock, rent, TP/operational results, correlations and all four separately fitted ridge models together. `data/years.json` maps each selection to its files. The older `housing.json` and `regression.json` remain unchanged.
+
+2025/26 uses the RSH TSM v1.1 release (5 November 2026) and PRP stock/rents v1.1 for 31 March 2026, downloaded 20 November 2026. It includes 1,063 non-profit reporting groups/standalone providers with owned stock; councils and for-profit providers remain excluded. The import reconstructs reporting groups from the current registered-parent hierarchy, rather than carrying forward last year's provider population or stock. Missing/suppressed observations remain null. YoY matches registration codes against the retained 2024/25 snapshot, without merger adjustments or rebasing to later revisions.
+
+The 2025/26 source reports more detailed predominant regions; the model uses these categories with London as reference, excluding unreported/inapplicable region values. Region granularity and provider cohorts therefore differ between years. The contextual basemap retains ONS December 2024 geometry. Barnsley and Sheffield's new 2025 codes are matched by exact authority name to approximate historical footprints, explicitly disclosed in the app.
+
+Reproduce the new snapshot and fits:
+
+```sh
+python scripts/import-2026.py --download
+python scripts/fit-regression.py --year 2025-26
+python scripts/check-regression.py
+pnpm test
+pnpm build
+pnpm check:pages
+```
+
+The importer records official source URLs, input archive hashes and the prior snapshot hash in `public/housing-2025-26.json`. Model checks cover both years and both predictor families. Default `fit-regression.py` behavior still rebuilds only 2024/25; specify `--year 2025-26` for the new year.

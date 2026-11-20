@@ -1,0 +1,28 @@
+[
+  {
+    "id": "2025-26",
+    "label": "2025/26",
+    "previous": "2024/25",
+    "housing": "housing-2025-26.json",
+    "regression": "regression-2025-26.json",
+    "stockYear": 2026,
+    "boundaryYear": 2024,
+    "downloaded": "20 November 2026",
+    "tsmSource": "https://www.gov.uk/government/statistics/tenant-satisfaction-measures-202526",
+    "stockSource": "https://www.gov.uk/government/statistics/private-registered-provider-social-housing-stock-and-rents-in-england-2025-to-2026",
+    "boundarySource": "https://www.arcgis.com/home/item.html?id=6a05f93297cf4a438d08e972099f54b9"
+  },
+  {
+    "id": "2024-25",
+    "label": "2024/25",
+    "previous": "2023/24",
+    "housing": "housing.json",
+    "regression": "regression.json",
+    "stockYear": 2025,
+    "boundaryYear": 2024,
+    "downloaded": "7 September 2026",
+    "tsmSource": "https://www.gov.uk/government/statistics/tenant-satisfaction-measures-202425",
+    "stockSource": "https://www.gov.uk/government/statistics/private-registered-provider-social-housing-stock-and-rents-in-england-2024-to-2025",
+    "boundarySource": "https://www.arcgis.com/home/item.html?id=6a05f93297cf4a438d08e972099f54b9"
+  }
+]

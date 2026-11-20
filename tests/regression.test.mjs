@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-const raw=readFileSync(new URL('../public/housing.json',import.meta.url));
-const data=JSON.parse(raw),results=JSON.parse(readFileSync(new URL('../public/regression.json',import.meta.url)));
+const years=JSON.parse(readFileSync(new URL('../data/years.json',import.meta.url)));
+for(const year of years){
+const raw=readFileSync(new URL('../public/'+year.housing,import.meta.url));
+const data=JSON.parse(raw),results=JSON.parse(readFileSync(new URL('../public/'+year.regression,import.meta.url)));
 const models=[...Object.values(results.models),...Object.values(results.operationalModels)];
 const close=(a,b,eps=1e-8)=>assert.ok(Math.abs(a-b)<eps,`${a} != ${b}`);
 test('regressions use the exact current dataset and separate tenure targets',()=>{
@@ -42,3 +44,5 @@ test('reported metrics and final coefficients agree with predictions and ridge n
   const best=[...m.curve].sort((a,b)=>a.rmse-b.rmse)[0];assert.equal(m.alpha,best.alpha);
  }
 });
+
+}

@@ -2,7 +2,9 @@
 import json
 from pathlib import Path
 import numpy as np
-r=json.loads((Path(__file__).resolve().parents[1]/'public/regression.json').read_text())
+root=Path(__file__).resolve().parents[1]
+results=[json.loads((root/'public'/year['regression']).read_text()) for year in json.loads((root/'data/years.json').read_text())]
+r={'models':{r['dataYear']+' '+t:m for r in results for t,m in r['models'].items()},'operationalModels':{r['dataYear']+' '+t:m for r in results for t,m in r['operationalModels'].items()}}
 for name,m in list(r['models'].items())+[(t+' operational',m) for t,m in r['operationalModels'].items()]:
     points={p['id']:p for p in m['points']}
     for fold in m['folds']:
