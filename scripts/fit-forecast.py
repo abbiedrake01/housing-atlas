@@ -13,17 +13,42 @@ snapshots = [
 ]
 
 
-def design(scores):
-    X = np.asarray(scores)
-    return np.column_stack([np.ones(len(X)), X])
+OPERATIONAL = [
+    m['key'] for m in json.loads((ROOT / 'data/operational-metrics.json').read_text())
+    if m['key'].startswith(('RP', 'CH'))
+]
+
+
+def design(rows, means):
+    scores = np.asarray([r[0] for r in rows], dtype=float)
+    scores = np.where(np.isnan(scores), means, scores)
+    assert np.isfinite(scores).all()
+    return np.column_stack([np.ones(len(scores)), scores])
 
 
 def fit(rows):
-    X = design([r[0] for r in rows])
+    means = np.nanmean(np.asarray([r[0] for r in rows], dtype=float), axis=0)
+    X = design(rows, means)
     y = np.asarray([r[1] for r in rows])
     coefficients, _, rank, _ = np.linalg.lstsq(X, y, rcond=None)
     assert rank == X.shape[1], 'Forecast predictors are rank deficient'
-    return coefficients
+    return coefficients, means, X, y
+
+
+def clustered_errors(X, residuals, provider_ids):
+    # CR1 sandwich estimator. Both transitions for a provider share a cluster.
+    groups = {}
+    for x, residual, pid in zip(X, residuals, provider_ids):
+        groups.setdefault(pid, np.zeros(X.shape[1]))
+        groups[pid] += x * residual
+    bread = np.linalg.pinv(X)
+    bread = bread @ bread.T
+    scores = np.asarray(list(groups.values()))
+    n, k = X.shape
+    g = len(groups)
+    correction = g / (g - 1) * (n - 1) / (n - k)
+    covariance = correction * bread @ (scores.T @ scores) @ bread
+    return np.sqrt(np.diag(covariance)), g
 
 
 def metrics(errors):
@@ -31,15 +56,20 @@ def metrics(errors):
 
 
 def build(tenure, indices, target):
+    operational = [key for key in OPERATIONAL if tenure == 'LCRA' or not key.startswith('RP')]
     scores = [
         {pid: p['tenures'][tenure]['scores'] for pid, p in providers.items() if p['tenures'][tenure]['stock'] > 0}
         for providers in snapshots
     ]
-    def inputs(row):
-        values = [row[i] for i in indices]
-        return values if all(v is not None for v in values) else None
+    def inputs(year, pid):
+        values = [scores[year][pid][i] for i in indices]
+        if any(v is None for v in values):
+            return None
+        operations = snapshots[year][pid].get('operational', {}).get(tenure, {}).get('values', {})
+        return values + [operations.get(key) for key in operational]
 
-    def transition(start, end):
+    def transition(year):
+        start, end = scores[year:year+2]
         rows = []
         eligible = 0
         for pid in sorted(start.keys() & end.keys()):
@@ -47,31 +77,54 @@ def build(tenure, indices, target):
             if y is None:
                 continue
             eligible += 1
-            X = inputs(start[pid])
+            X = inputs(year, pid)
             if X is not None:
-                rows.append((X, y, start[pid][target]))
+                rows.append((X, y, start[pid][target], pid))
         return rows, eligible
 
-    first, eligible_first = transition(scores[0], scores[1])
-    second, eligible_second = transition(scores[1], scores[2])
-    validation = fit(first)
+    first, eligible_first = transition(0)
+    second, eligible_second = transition(1)
+    validation, validation_means, _, _ = fit(first)
     held_out = np.asarray([r[1] for r in second])
-    model_errors = design([r[0] for r in second]) @ validation - held_out
+    model_errors = design(second, validation_means) @ validation - held_out
     naive_errors = np.asarray([r[2] for r in second]) - held_out
-    coefficients = fit(first + second)
+    pooled = first + second
+    coefficients, means, X, y = fit(pooled)
+    standard_errors, clusters = clustered_errors(X, y - X @ coefficients, [r[3] for r in pooled])
+    assert np.all(standard_errors > 0)
+    df = len(y) - len(coefficients)
+    rss = float(np.sum((y - X @ coefficients)**2))
+    tss = float(np.sum((y - y.mean())**2))
 
     predictions = []
-    for pid, row in scores[2].items():
-        X = inputs(row)
+    for pid in scores[2]:
+        X = inputs(2, pid)
         if X is None:
             continue
         predictions.append({
             'id': pid, 'name': snapshots[2][pid]['name'],
             'observed': [s.get(pid, [None] * 12)[target] for s in scores],
-            'prediction': float(np.dot([1, *X], coefficients)),
+            'prediction': float(design([(X,)], means)[0] @ coefficients),
+            'imputed': [key for key, value in zip(operational, X[len(indices):]) if value is None],
         })
     return {
-        'inputs': [f'TP{i+1:02d}' for i in indices],
+        'inputs': [f'TP{i+1:02d}' for i in indices] + operational,
+        'imputation': {
+            key: {
+                'mean': float(means[i]),
+                'validationMean': float(validation_means[i]),
+                'trainingMissing': sum(r[0][i] is None for r in pooled),
+                'forecastMissing': sum(key in p['imputed'] for p in predictions),
+            }
+            for i, key in enumerate(operational, start=len(indices))
+        },
+        'fit': {
+            'r2': 1 - rss / tss,
+            'adjustedR2': 1 - (rss / df) / (tss / (len(y) - 1)),
+            'clusters': clusters,
+            'standardErrors': standard_errors.tolist(),
+            'tStats': (coefficients / standard_errors).tolist(),
+        },
         'training': [{'used': len(first), 'eligible': eligible_first}, {'used': len(second), 'eligible': eligible_second}],
         'backtest': {'n': len(second), 'linear': metrics(model_errors), 'persistence': metrics(naive_errors)},
         'intercept': float(coefficients[0]), 'coefficients': coefficients[1:].tolist(),

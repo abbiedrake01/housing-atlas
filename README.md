@@ -144,3 +144,5 @@ The 2027 tab fits TP01 separately for LCRA and LCHO on the three reporting years
 The default 2027 forecast uses a pooled one-year-ahead OLS model. Select a tenure and one TP outcome. Predictors are all applicable prior-year TP scores, including the lag of the outcome. Training pools 2024→2025 and 2025→2026 by registration code within tenure, using complete predictor/outcome rows. The temporal backtest fits the first transition alone and tests on the second, against carrying forward the preceding score. The forecast refits on both transitions and scores all providers with complete 2025/26 inputs. The earlier straight-line TP01 baseline remains available for comparison.
 
 Regenerate the downloadable forecast data with `python scripts/fit-forecast.py` in the regression environment.
+
+The pooled forecasts also use prior-year RP and CH measures (CH only for LCHO). Each missing operational input is replaced by its observed mean from the corresponding training fit. The forward backtest calculates means using the first transition only. Coefficient details include CR1 provider-clustered standard errors, t-statistics, and imputation coverage.

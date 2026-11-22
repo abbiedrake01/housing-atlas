@@ -1,15 +1,17 @@
 import {useEffect, useState} from 'react';
 import {CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
-import {measures, satisfaction} from '@/lib/measures';
+import {measures, allMeasures} from '@/lib/measures';
 
 type Tenure = 'LCRA' | 'LCHO';
-type Prediction = {id:string; name:string; observed:(number|null)[]; prediction:number};
+type Prediction = {id:string; name:string; observed:(number|null)[]; prediction:number; imputed:string[]};
 type Model = {
  inputs:string[];
  training:{used:number; eligible:number}[];
  backtest:{n:number; linear:{rmse:number; mae:number}; persistence:{rmse:number; mae:number}};
  intercept:number;
  coefficients:number[];
+ fit:{r2:number; adjustedR2:number; clusters:number; standardErrors:number[]; tStats:number[]};
+ imputation:Record<string,{mean:number; trainingMissing:number; forecastMissing:number}>;
  predictions:Prediction[];
 };
 type Models = Record<Tenure, Record<string,Model>>;
@@ -57,7 +59,7 @@ export default function PooledForecast() {
   <div className="reg-heading"><div>
    <div className="eyebrow">ONE-YEAR-AHEAD LINEAR MODEL</div>
    <h1>2027 satisfaction projections</h1>
-   <p>Use a provider’s published TP scores to estimate one selected TP score the following year.</p>
+   <p>Use a provider’s prior-year TP, repairs and complaints measures to estimate one selected TP score.</p>
   </div></div>
   <div className="corr-controls forecast-controls pooled-controls">
    <label className="corr-control">Housing type
@@ -99,6 +101,7 @@ export default function PooledForecast() {
      </LineChart>
     </ResponsiveContainer></div>
     {!selected && <p className="reg-footnote">Associations are equally weighted. Historical means use the available scores within this forecast cohort ({history.map(r=>r.n).join(', ')} providers by year).</p>}
+    {selected && selected.imputed.length>0 && <p className="reg-footnote">Training averages substituted for {selected.imputed.join(', ')} in this forecast.</p>}
     {(projection<0 || projection>100) && <p className="reg-footnote">The unconstrained model returned a value outside the valid 0–100% range.</p>}
    </section>
    <section className="reg-card forecast-backtest">
@@ -109,12 +112,29 @@ export default function PooledForecast() {
    <details className="reg-method">
     <summary>Model specification and coefficients</summary>
     <div>
-     <p>Ordinary least squares with an intercept. Each matched provider-year transition receives equal weight. Providers are matched by registration code and tenure. Training requires all applicable TP predictors in the starting year and the selected outcome in the next year. The 2027 forecast uses the refit on both transitions and requires all applicable 2025/26 inputs.</p>
-     <p>Training coverage among matched providers with a published outcome was {model.training[0].used}/{model.training[0].eligible} for 2024→2025 and {model.training[1].used}/{model.training[1].eligible} for 2025→2026. Region, housing mix, survey changes and mergers are unadjusted.</p>
-     <div className="reg-coefficient-list">
-      <div><span>Intercept</span><b>{model.intercept.toFixed(3)}</b></div>
-      {model.inputs.map((key,i)=><div key={key}><span>{key} · {satisfaction.find(m=>m.key===key)?.label}</span><b>{model.coefficients[i].toFixed(3)} pp/pp</b></div>)}
+     <p>In-sample R² {model.fit.r2.toFixed(3)} · Adjusted R² {model.fit.adjustedR2.toFixed(3)} · {model.fit.clusters} provider clusters</p>
+     <p>Ordinary least squares with an intercept. Each provider-year transition receives equal weight, matched by registration code and tenure. The backtest learns replacement averages from the first transition only. The 2027 forecast uses means from the pooled fit. Missing operational values are filled feature by feature. TP inputs and the training outcome must be present. RP measures apply to rental only.</p>
+     <p>Standard errors are clustered by provider (CR1) to account for repeat observations. The t-statistics are coefficient ÷ standard error, conditional on the filled-in data. Region, housing mix, survey changes and mergers are unadjusted.</p>
+     <div className="forecast-table-wrap">
+      <table className="forecast-table">
+       <thead><tr><th scope="col">Predictor</th><th scope="col">Coefficient</th><th scope="col">Clustered SE</th><th scope="col">t-statistic</th><th scope="col">Imputation mean</th><th scope="col">Filled · fit / forecast</th></tr></thead>
+       <tbody>
+        {['Intercept',...model.inputs].map((key,i)=>{
+         const measure=allMeasures.find(m=>m.key===key);
+         const imputation=model.imputation[key];
+         return <tr key={key}>
+          <th scope="row">{measure ? `${key} · ${measure.label} (${measure.unit})` : key}</th>
+          <td>{(i===0?model.intercept:model.coefficients[i-1]).toFixed(3)}</td>
+          <td>{model.fit.standardErrors[i].toFixed(3)}</td>
+          <td>{model.fit.tStats[i].toFixed(2)}</td>
+          <td>{imputation?.mean.toFixed(2)??'—'}</td>
+          <td>{imputation?`${imputation.trainingMissing} / ${imputation.forecastMissing}`:'—'}</td>
+         </tr>;
+        })}
+       </tbody>
+      </table>
      </div>
+     <p>Coefficients show the forecast change in percentage points per one unit of the predictor. Training coverage was {model.training[0].used}/{model.training[0].eligible} for 2024→2025 and {model.training[1].used}/{model.training[1].eligible} for 2025→2026.</p>
     </div>
    </details>
   </>}
