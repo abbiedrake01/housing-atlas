@@ -1,4 +1,4 @@
-"""Fit one pooled one-year-ahead ridge model per tenure and TP outcome."""
+"""Fit one pooled one-year-ahead ridge model per tenure and measure."""
 from pathlib import Path
 import json
 
@@ -14,10 +14,15 @@ snapshots = [
 ]
 
 
-OPERATIONAL = [
-    m['key'] for m in json.loads((ROOT / 'data/operational-metrics.json').read_text())
-    if m['key'].startswith(('RP', 'CH'))
-]
+OPERATIONAL = json.loads((ROOT / 'data/operational-metrics.json').read_text())
+
+
+def applicable_operational(tenure):
+    return [m['key'] for m in OPERATIONAL if tenure == 'LCRA' or m['scope'] != 'LCRA']
+
+
+def operational_value(provider, tenure, key):
+    return (provider or {}).get('operational', {}).get(tenure, {}).get('values', {}).get(key)
 
 
 def design(rows, means):
@@ -42,6 +47,15 @@ def fit(rows, penalty):
     transform = np.diag([1, *(1 / scales)])
     transform[0, 1:] = -means / scales
     return transform @ beta, means, scales, Z, y, bread, transform
+
+
+def threshold(coefficients, means, scales, outcome_scale):
+    """Zero small standardized effects while preserving the fitted mean."""
+    result = coefficients.copy()
+    weak = np.abs(result[1:] * scales / outcome_scale) < 0.05
+    result[1:] = np.where(weak, 0, result[1:])
+    result[0] += (coefficients[1:] - result[1:]) @ means
+    return result
 
 
 def choose_penalty(rows):
@@ -78,39 +92,52 @@ def metrics(errors):
 
 
 def build(tenure, indices, target):
-    operational = [key for key in OPERATIONAL if tenure == 'LCRA' or not key.startswith('RP')]
+    operational = [key for key in applicable_operational(tenure) if key.startswith(('RP', 'CH'))]
+    if not target.startswith('TP') and target not in operational:
+        operational.append(target)
+    target_index = int(target[2:]) - 1 if target.startswith('TP') else None
     scores = [
         {pid: p['tenures'][tenure]['scores'] for pid, p in providers.items() if p['tenures'][tenure]['stock'] > 0}
         for providers in snapshots
     ]
+    def observed(year, pid):
+        if pid not in scores[year]:
+            return None
+        if target_index is not None:
+            return scores[year][pid][target_index]
+        return operational_value(snapshots[year][pid], tenure, target)
+
     def inputs(year, pid):
         values = [scores[year][pid][i] for i in indices]
         if any(v is None for v in values):
             return None
-        operations = snapshots[year][pid].get('operational', {}).get(tenure, {}).get('values', {})
-        return values + [operations.get(key) for key in operational]
+        return values + [operational_value(snapshots[year][pid], tenure, key) for key in operational]
 
     def transition(year):
         start, end = scores[year:year+2]
         rows = []
         eligible = 0
         for pid in sorted(start.keys() & end.keys()):
-            y = end[pid][target]
+            y = observed(year+1, pid)
             if y is None:
                 continue
             eligible += 1
             X = inputs(year, pid)
             if X is not None:
-                rows.append((X, y, start[pid][target], pid))
+                rows.append((X, y, observed(year, pid), pid))
         return rows, eligible
 
     first, eligible_first = transition(0)
     second, eligible_second = transition(1)
     penalty = choose_penalty(first)
-    validation, validation_means, *_ = fit(first, penalty)
+    validation, validation_means, validation_scales, _, validation_y, *_ = fit(first, penalty)
     held_out = np.asarray([r[1] for r in second])
-    model_errors = design(second, validation_means) @ validation - held_out
-    naive_errors = np.asarray([r[2] for r in second]) - held_out
+    test_design = design(second, validation_means)
+    model_errors = test_design @ validation - held_out
+    threshold_errors = test_design @ threshold(validation, validation_means, validation_scales, validation_y.std()) - held_out
+    previous = np.asarray([r[2] for r in second], dtype=float)
+    paired = np.isfinite(previous)
+    naive_errors = previous[paired] - held_out[paired]
     pooled = first + second
     coefficients, means, scales, Z, y, bread, transform = fit(pooled, penalty)
     residuals = y - design(pooled, means) @ coefficients
@@ -118,16 +145,20 @@ def build(tenure, indices, target):
     assert np.all(standard_errors > 0)
     rss = float(residuals @ residuals)
     tss = float(np.sum((y - y.mean())**2))
+    sparse = threshold(coefficients, means, scales, y.std())
+    sparse_residuals = y - design(pooled, means) @ sparse
 
     predictions = []
     for pid in scores[2]:
         X = inputs(2, pid)
         if X is None:
             continue
+        row = design([(X,)], means)[0]
         predictions.append({
             'id': pid, 'name': snapshots[2][pid]['name'],
-            'observed': [s.get(pid, [None] * 12)[target] for s in scores],
-            'prediction': float(design([(X,)], means)[0] @ coefficients),
+            'observed': [observed(year, pid) for year in range(3)],
+            'prediction': float(row @ coefficients),
+            'thresholdPrediction': float(row @ sparse),
             'imputed': [key for key, value in zip(operational, X[len(indices):]) if value is None],
         })
     return {
@@ -145,12 +176,25 @@ def build(tenure, indices, target):
             'r2': 1 - rss / tss,
             'penalty': penalty,
             'scales': scales.tolist(),
+            'outcomeScale': float(y.std()),
             'clusters': clusters,
             'standardErrors': standard_errors.tolist(),
             'coefficientSERatios': (coefficients / standard_errors).tolist(),
         },
         'training': [{'used': len(first), 'eligible': eligible_first}, {'used': len(second), 'eligible': eligible_second}],
-        'backtest': {'n': len(second), 'ridge': metrics(model_errors), 'persistence': metrics(naive_errors)},
+        'backtest': {
+            'n': len(second),
+            'ridge': metrics(model_errors),
+            'pairedN': int(paired.sum()),
+            'pairedRidge': metrics(model_errors[paired]) if paired.any() else None,
+            'persistence': metrics(naive_errors) if paired.any() else None,
+        },
+        'threshold': {
+            'intercept': float(sparse[0]),
+            'r2': 1 - float(sparse_residuals @ sparse_residuals) / tss,
+            'ridge': metrics(threshold_errors),
+            'pairedRidge': metrics(threshold_errors[paired]) if paired.any() else None,
+        },
         'intercept': float(coefficients[0]), 'coefficients': coefficients[1:].tolist(),
         'predictions': sorted(predictions, key=lambda p: p['name'].casefold()),
     }
@@ -158,7 +202,8 @@ def build(tenure, indices, target):
 
 models = {}
 for tenure, indices in [('LCRA', list(range(12))), ('LCHO', [0, *range(4, 12)])]:
-    models[tenure] = {f'TP{i+1:02d}': build(tenure, indices, i) for i in indices}
+    outcomes = [f'TP{i+1:02d}' for i in indices] + applicable_operational(tenure)
+    models[tenure] = {target: build(tenure, indices, target) for target in outcomes}
     tp01 = models[tenure]['TP01']
     print(tenure, tp01['training'], tp01['backtest'], len(tp01['predictions']))
 (ROOT / 'data/forecast-ridge-2027.json').write_text(json.dumps(models, separators=(',', ':'), ensure_ascii=False, allow_nan=False) + '\n')

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const load=f=>JSON.parse(readFileSync(new URL('../public/'+f,import.meta.url)));
 const snapshots=['housing-2023-24.json','housing.json','housing-2025-26.json'].map(f=>load(f).providers);
+const operational=JSON.parse(readFileSync(new URL('../data/operational-metrics.json',import.meta.url)));
 const models=JSON.parse(readFileSync(new URL('../data/forecast-ridge-2027.json',import.meta.url)));
 
 test('one-year forecasts use both observed transitions and score only complete 2026 inputs',()=>{
@@ -10,22 +11,26 @@ test('one-year forecasts use both observed transitions and score only complete 2
   const years=snapshots.map(rows=>new Map(rows.filter(p=>p.tenures[tenure].stock>0).map(p=>[p.id,p])));
   const indices=tenure==='LCRA'?[...Array(12).keys()]:[0,4,5,6,7,8,9,10,11];
   const codes=indices.map(i=>'TP'+String(i+1).padStart(2,'0'));
-  assert.deepEqual(Object.keys(models[tenure]),codes);
-  const ops=[...(tenure==='LCRA'?['RP01','RP02_1','RP02_2']:[]),'CH01_1','CH01_2','CH02_1','CH02_2'];
+  const availableOps=operational.filter(m=>tenure==='LCRA'||m.scope!=='LCRA').map(m=>m.key);
+  assert.deepEqual(Object.keys(models[tenure]),[...codes,...availableOps]);
+  const baseOps=[...(tenure==='LCRA'?['RP01','RP02_1','RP02_2']:[]),'CH01_1','CH01_2','CH02_1','CH02_2'];
   const scores=p=>p?.tenures[tenure].scores;
   const tp=p=>indices.map(i=>scores(p)[i]);
-  const values=p=>ops.map(key=>p.operational?.[tenure]?.values[key]??null);
+  const op=(p,key)=>p?.operational?.[tenure]?.values[key]??null;
   for(const [target,model] of Object.entries(models[tenure])){
+   const ops=availableOps.includes(target)&&!baseOps.includes(target)?[...baseOps,target]:baseOps;
+   const values=p=>ops.map(key=>op(p,key));
+   const observed=p=>target.startsWith('TP')?(scores(p)?.[Number(target.slice(2))-1]??null):op(p,target);
    assert.deepEqual(model.inputs,[...codes,...ops]);
+   assert.ok(model.fit.outcomeScale>0);
    const features=p=>[...tp(p),...values(p).map((v,i)=>v??model.imputation[ops[i]].mean)];
    const counts=ops.map(()=>({n:0,sum:0,missing:0,firstN:0,firstSum:0}));
-   const j=Number(target.slice(2))-1;
    const predict=x=>model.intercept+x.reduce((total,v,i)=>total+v*model.coefficients[i],0);
    const gradient=Array(model.inputs.length+1).fill(0);
    for(let t=0;t<2;t++){
-    let n=0,eligible=0,baselineSquaredError=0;
+    let n=0,eligible=0,pairedN=0,baselineSquaredError=0;
     for(const [id,p] of years[t]){
-     const y=scores(years[t+1].get(id))?.[j];
+     const y=observed(years[t+1].get(id));
      if(y==null)continue;
      eligible++;
      if(tp(p).some(v=>v==null))continue;
@@ -38,12 +43,16 @@ test('one-year forecasts use both observed transitions and score only complete 2
      });
      n++;
      [1,...x].forEach((v,k)=>gradient[k]+=v*(y-predict(x)));
-     baselineSquaredError+=(y-scores(p)[j])**2;
+     const prior=observed(p);
+     if(prior!==null){pairedN++;baselineSquaredError+=(y-prior)**2}
     }
     assert.deepEqual(model.training[t],{used:n,eligible});
     if(t===1){
      assert.equal(model.backtest.n,n);
-     assert.ok(Math.abs(model.backtest.persistence.rmse-Math.sqrt(baselineSquaredError/n))<1e-10);
+     assert.equal(model.backtest.pairedN,pairedN);
+     assert.ok(Math.abs(model.backtest.persistence.rmse-Math.sqrt(baselineSquaredError/pairedN))<1e-10);
+     assert.ok(Number.isFinite(model.backtest.pairedRidge.rmse));
+     if(n===pairedN)assert.equal(model.backtest.ridge.rmse,model.backtest.pairedRidge.rmse);
     }
    }
    assert.ok(model.fit.penalty>0);
@@ -66,9 +75,14 @@ test('one-year forecasts use both observed transitions and score only complete 2
     assert.ok(Math.abs(b/model.fit.standardErrors[i]-model.fit.coefficientSERatios[i])<1e-10);
    });
    assert.deepEqual(model.predictions.map(p=>p.id).sort(),complete.map(([id])=>id).sort());
+   const zeroed=model.coefficients.map((b,i)=>Math.abs(b*model.fit.scales[i]/model.fit.outcomeScale)<0.05?0:b);
+   assert.ok(Number.isFinite(model.threshold.ridge.rmse));
+   assert.ok(Number.isFinite(model.threshold.pairedRidge.rmse));
    for(const p of model.predictions){
     assert.ok(Math.abs(p.prediction-predict(features(years[2].get(p.id))))<1e-10);
-    assert.deepEqual(p.observed,years.map(year=>scores(year.get(p.id))?.[j]??null));
+    const thresholdPrediction=features(years[2].get(p.id)).reduce((sum,v,i)=>sum+v*zeroed[i],model.threshold.intercept);
+    assert.ok(Math.abs(p.thresholdPrediction-thresholdPrediction)<1e-10);
+    assert.deepEqual(p.observed,years.map(year=>observed(year.get(p.id))));
    }
   }
  }
