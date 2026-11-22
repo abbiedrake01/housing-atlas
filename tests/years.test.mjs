@@ -6,7 +6,7 @@ const read=p=>JSON.parse(readFileSync(new URL('../'+p,import.meta.url)));
 const years=read('data/years.json');
 const old=read('public/housing.json'),fresh=read('public/housing-2025-26.json');
 test('year manifest resolves separate datasets and freshly fitted models',()=>{
- assert.deepEqual(years.map(y=>y.label),['2025/26','2024/25']);
+ assert.deepEqual(years.map(y=>y.label),['2025/26','2024/25','2023/24']);
  for(const year of years){const raw=readFileSync(new URL('../public/'+year.housing,import.meta.url));const model=read('public/'+year.regression);assert.equal(model.dataYear,year.label);assert.equal(model.sourceSha256,createHash('sha256').update(raw).digest('hex'));}
 });
 test('2025/26 published examples and yearly stock are distinct from 2024/25',()=>{

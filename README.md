@@ -134,3 +134,9 @@ pnpm check:pages
 ```
 
 The importer records official source URLs, input archive hashes and the prior snapshot hash in `public/housing-2025-26.json`. Model checks cover both years and both predictor families. Default `fit-regression.py` behavior still rebuilds only 2024/25; specify `--year 2025-26` for the new year.
+
+### 2023/24 and 2027 projections
+
+The 2023/24 selector uses the revised RSH TSM workbook and March 2024 stock and rents release. Rebuild it with `python scripts/import-2026.py --year 2024` (requires openpyxl), then run `python scripts/fit-regression.py --year 2023-24`. There is no earlier TSM year in the atlas.
+
+The 2027 tab fits TP01 separately for LCRA and LCHO on the three reporting years ending March 2024, 2025 and 2026. It matches providers by exact registration code and requires a published score in each year. The cohort view averages the same providers in each year, with equal weight. For observations `a, b, c`, the annual OLS slope is `(c - a) / 2` and the March 2027 projection is `(a + b + c) / 3 + (c - a)`. Estimates are unadjusted for changes in provider structure, surveys, region and tenure mix. Raw extrapolations outside 0–100% are flagged.
