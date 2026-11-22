@@ -2,6 +2,7 @@ import {useEffect, useMemo, useState} from 'react';
 import {CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
 import years from '@/data/years.json';
 import {annualTrend} from '@/lib/trend';
+import PooledForecast from '@/components/pooled-forecast';
 import type {Provider} from '@/lib/analysis';
 
 const history = [...years].sort((a,b) => a.stockYear - b.stockYear);
@@ -10,6 +11,21 @@ const signed = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}`;
 type Tenure = 'LCRA' | 'LCHO';
 
 export default function Forecast() {
+ const [method, setMethod] = useState('pooled');
+ return <>
+  <div className="forecast-method">
+   <label className="corr-control">Projection method
+    <select value={method} onChange={e=>setMethod(e.target.value)}>
+     <option value="pooled">Pooled linear model</option>
+     <option value="trend">Straight-line TP01 baseline</option>
+    </select>
+   </label>
+  </div>
+  {method==='pooled' ? <PooledForecast/> : <TrendForecast/>}
+ </>;
+}
+
+function TrendForecast() {
  const [snapshots, setSnapshots] = useState<Provider[][] | null>(null);
  const [error, setError] = useState(false);
  const [attempt, setAttempt] = useState(0);
