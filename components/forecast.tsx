@@ -16,7 +16,7 @@ export default function Forecast() {
   <div className="forecast-method">
    <label className="corr-control">Projection method
     <select value={method} onChange={e=>setMethod(e.target.value)}>
-     <option value="pooled">Pooled linear model</option>
+     <option value="pooled">Pooled ridge model</option>
      <option value="trend">Straight-line TP01 baseline</option>
     </select>
    </label>

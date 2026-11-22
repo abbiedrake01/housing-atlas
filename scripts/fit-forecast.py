@@ -1,8 +1,9 @@
-"""Fit one pooled one-year-ahead OLS model per tenure and TP outcome."""
+"""Fit one pooled one-year-ahead ridge model per tenure and TP outcome."""
 from pathlib import Path
 import json
 
 import numpy as np
+from sklearn.model_selection import GroupKFold
 
 ROOT = Path(__file__).resolve().parents[1]
 years = sorted(json.loads((ROOT / 'data/years.json').read_text()), key=lambda year: year['stockYear'])
@@ -26,28 +27,49 @@ def design(rows, means):
     return np.column_stack([np.ones(len(scores)), scores])
 
 
-def fit(rows):
+def fit(rows, penalty):
     means = np.nanmean(np.asarray([r[0] for r in rows], dtype=float), axis=0)
     X = design(rows, means)
     y = np.asarray([r[1] for r in rows])
-    coefficients, _, rank, _ = np.linalg.lstsq(X, y, rcond=None)
-    assert rank == X.shape[1], 'Forecast predictors are rank deficient'
-    return coefficients, means, X, y
+    scales = X[:, 1:].std(axis=0)
+    scales[scales == 0] = 1
+    Z = X.copy()
+    Z[:, 1:] = (X[:, 1:] - means) / scales
+    regularizer = np.diag([0, *([len(y) * penalty] * len(means))])
+    bread = np.linalg.inv(Z.T @ Z + regularizer)
+    beta = bread @ Z.T @ y
+    # Map standardized coefficients and their covariance back to the reported units.
+    transform = np.diag([1, *(1 / scales)])
+    transform[0, 1:] = -means / scales
+    return transform @ beta, means, scales, Z, y, bread, transform
 
 
-def clustered_errors(X, residuals, provider_ids):
-    # CR1 sandwich estimator. Both transitions for a provider share a cluster.
+def choose_penalty(rows):
+    folds = list(GroupKFold(n_splits=5).split(rows, groups=[r[3] for r in rows]))
+    candidates = np.logspace(-4, 1, 26)
+    errors = []
+    for penalty in candidates:
+        squared = []
+        for train, test in folds:
+            coeff, means, *_ = fit([rows[i] for i in train], penalty)
+            holdout = [rows[i] for i in test]
+            residual = design(holdout, means) @ coeff - [r[1] for r in holdout]
+            squared.extend(residual**2)
+        errors.append(np.mean(squared))
+    return float(candidates[np.argmin(errors)])
+
+
+def clustered_errors(X, residuals, provider_ids, bread, transform):
     groups = {}
     for x, residual, pid in zip(X, residuals, provider_ids):
         groups.setdefault(pid, np.zeros(X.shape[1]))
         groups[pid] += x * residual
-    bread = np.linalg.pinv(X)
-    bread = bread @ bread.T
     scores = np.asarray(list(groups.values()))
     n, k = X.shape
     g = len(groups)
     correction = g / (g - 1) * (n - 1) / (n - k)
-    covariance = correction * bread @ (scores.T @ scores) @ bread
+    raw_bread = transform @ bread
+    covariance = correction * raw_bread @ (scores.T @ scores) @ raw_bread.T
     return np.sqrt(np.diag(covariance)), g
 
 
@@ -84,16 +106,17 @@ def build(tenure, indices, target):
 
     first, eligible_first = transition(0)
     second, eligible_second = transition(1)
-    validation, validation_means, _, _ = fit(first)
+    penalty = choose_penalty(first)
+    validation, validation_means, *_ = fit(first, penalty)
     held_out = np.asarray([r[1] for r in second])
     model_errors = design(second, validation_means) @ validation - held_out
     naive_errors = np.asarray([r[2] for r in second]) - held_out
     pooled = first + second
-    coefficients, means, X, y = fit(pooled)
-    standard_errors, clusters = clustered_errors(X, y - X @ coefficients, [r[3] for r in pooled])
+    coefficients, means, scales, Z, y, bread, transform = fit(pooled, penalty)
+    residuals = y - design(pooled, means) @ coefficients
+    standard_errors, clusters = clustered_errors(Z, residuals, [r[3] for r in pooled], bread, transform)
     assert np.all(standard_errors > 0)
-    df = len(y) - len(coefficients)
-    rss = float(np.sum((y - X @ coefficients)**2))
+    rss = float(residuals @ residuals)
     tss = float(np.sum((y - y.mean())**2))
 
     predictions = []
@@ -120,13 +143,14 @@ def build(tenure, indices, target):
         },
         'fit': {
             'r2': 1 - rss / tss,
-            'adjustedR2': 1 - (rss / df) / (tss / (len(y) - 1)),
+            'penalty': penalty,
+            'scales': scales.tolist(),
             'clusters': clusters,
             'standardErrors': standard_errors.tolist(),
-            'tStats': (coefficients / standard_errors).tolist(),
+            'coefficientSERatios': (coefficients / standard_errors).tolist(),
         },
         'training': [{'used': len(first), 'eligible': eligible_first}, {'used': len(second), 'eligible': eligible_second}],
-        'backtest': {'n': len(second), 'linear': metrics(model_errors), 'persistence': metrics(naive_errors)},
+        'backtest': {'n': len(second), 'ridge': metrics(model_errors), 'persistence': metrics(naive_errors)},
         'intercept': float(coefficients[0]), 'coefficients': coefficients[1:].tolist(),
         'predictions': sorted(predictions, key=lambda p: p['name'].casefold()),
     }
@@ -137,4 +161,4 @@ for tenure, indices in [('LCRA', list(range(12))), ('LCHO', [0, *range(4, 12)])]
     models[tenure] = {f'TP{i+1:02d}': build(tenure, indices, i) for i in indices}
     tp01 = models[tenure]['TP01']
     print(tenure, tp01['training'], tp01['backtest'], len(tp01['predictions']))
-(ROOT / 'public/forecast-2027.json').write_text(json.dumps(models, separators=(',', ':'), ensure_ascii=False, allow_nan=False) + '\n')
+(ROOT / 'data/forecast-ridge-2027.json').write_text(json.dumps(models, separators=(',', ':'), ensure_ascii=False, allow_nan=False) + '\n')

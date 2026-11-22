@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 const load=f=>JSON.parse(readFileSync(new URL('../public/'+f,import.meta.url)));
 const snapshots=['housing-2023-24.json','housing.json','housing-2025-26.json'].map(f=>load(f).providers);
-const models=load('forecast-2027.json');
+const models=JSON.parse(readFileSync(new URL('../data/forecast-ridge-2027.json',import.meta.url)));
 
 test('one-year forecasts use both observed transitions and score only complete 2026 inputs',()=>{
  for(const tenure of ['LCRA','LCHO']){
@@ -46,7 +46,13 @@ test('one-year forecasts use both observed transitions and score only complete 2
      assert.ok(Math.abs(model.backtest.persistence.rmse-Math.sqrt(baselineSquaredError/n))<1e-10);
     }
    }
-   assert.ok(gradient.every(g=>Math.abs(g)<1e-6),'pooled OLS normal equations');
+   assert.ok(model.fit.penalty>0);
+   const n=model.training.reduce((sum,row)=>sum+row.used,0);
+   assert.ok(Math.abs(gradient[0])<1e-6,'unpenalized intercept');
+   model.coefficients.forEach((b,i)=>{
+    const penaltyGradient=n*model.fit.penalty*model.fit.scales[i]**2*b;
+    assert.ok(Math.abs(gradient[i+1]-penaltyGradient)<1e-6,'ridge normal equations in original units');
+   });
    const complete=[...years[2]].filter(([,p])=>tp(p).every(v=>v!=null));
    ops.forEach((key,i)=>{
     const c=counts[i], imputation=model.imputation[key];
@@ -57,7 +63,7 @@ test('one-year forecasts use both observed transitions and score only complete 2
    });
    [model.intercept,...model.coefficients].forEach((b,i)=>{
     assert.ok(model.fit.standardErrors[i]>0);
-    assert.ok(Math.abs(b/model.fit.standardErrors[i]-model.fit.tStats[i])<1e-10);
+    assert.ok(Math.abs(b/model.fit.standardErrors[i]-model.fit.coefficientSERatios[i])<1e-10);
    });
    assert.deepEqual(model.predictions.map(p=>p.id).sort(),complete.map(([id])=>id).sort());
    for(const p of model.predictions){

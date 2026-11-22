@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {readFile,stat} from 'node:fs/promises';
+import {readFile,readdir,stat} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import path from 'node:path';
 
@@ -23,7 +23,11 @@ try{
  const urls=[...html.matchAll(/(?:src|href)="([^"#]+)"/g)].map(m=>new URL(m[1],base));
  const years=JSON.parse(await readFile('data/years.json','utf8'));
  for(const year of years){urls.push(new URL(year.housing,base),new URL(year.regression,base));}
- urls.push(new URL('forecast-2027.json',base));
+ const forecastAssets=(await readdir(path.join(root,'assets'))).filter(file=>/^forecast-ridge-2027-[\w-]+\.json$/.test(file));
+ assert.equal(forecastAssets.length,1);
+ const forecastResponse=await fetch(new URL('assets/'+forecastAssets[0],base));
+ assert.equal(forecastResponse.status,200);
+ assert.equal(await forecastResponse.text(),await readFile('data/forecast-ridge-2027.json','utf8'));
  for(const url of urls){const r=await fetch(url);assert.equal(r.status,200,url.href);assert.ok(url.pathname.startsWith('/housing-atlas/'));}
  const cssURL=new URL('fonts/nunito.css',base);const css=await(await fetch(cssURL)).text();
  for(const [,font] of css.matchAll(/url\(([^)]+)\)/g)){const r=await fetch(new URL(font,cssURL));assert.equal(r.status,200,font);}

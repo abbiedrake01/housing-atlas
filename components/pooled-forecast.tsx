@@ -1,5 +1,6 @@
 import {useEffect, useState} from 'react';
 import {CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
+import forecastUrl from '@/data/forecast-ridge-2027.json?url&no-inline';
 import {measures, allMeasures} from '@/lib/measures';
 
 type Tenure = 'LCRA' | 'LCHO';
@@ -7,10 +8,10 @@ type Prediction = {id:string; name:string; observed:(number|null)[]; prediction:
 type Model = {
  inputs:string[];
  training:{used:number; eligible:number}[];
- backtest:{n:number; linear:{rmse:number; mae:number}; persistence:{rmse:number; mae:number}};
+ backtest:{n:number; ridge:{rmse:number; mae:number}; persistence:{rmse:number; mae:number}};
  intercept:number;
  coefficients:number[];
- fit:{r2:number; adjustedR2:number; clusters:number; standardErrors:number[]; tStats:number[]};
+ fit:{r2:number; penalty:number; clusters:number; standardErrors:number[]; coefficientSERatios:number[]};
  imputation:Record<string,{mean:number; trainingMissing:number; forecastMissing:number}>;
  predictions:Prediction[];
 };
@@ -27,10 +28,16 @@ export default function PooledForecast() {
  useEffect(() => {
   const controller = new AbortController();
   setError(false);
-  fetch(`${import.meta.env.BASE_URL}forecast-2027.json`, {signal:controller.signal})
+  fetch(forecastUrl, {signal:controller.signal})
    .then(response => {
     if (!response.ok) throw new Error('Forecast data unavailable');
     return response.json() as Promise<Models>;
+   })
+   .then(data => {
+    if (!data.LCRA?.TP01?.fit?.penalty || !data.LCHO?.TP01?.fit?.penalty) {
+     throw new Error('Unexpected forecast data version');
+    }
+    return data;
    })
    .then(setModels)
    .catch(() => { if (!controller.signal.aborted) setError(true); });
@@ -57,7 +64,7 @@ export default function PooledForecast() {
 
  return <div className="regression-page forecast-page">
   <div className="reg-heading"><div>
-   <div className="eyebrow">ONE-YEAR-AHEAD LINEAR MODEL</div>
+   <div className="eyebrow">ONE-YEAR-AHEAD RIDGE MODEL</div>
    <h1>2027 satisfaction projections</h1>
    <p>Use a provider’s prior-year TP, repairs and complaints measures to estimate one selected TP score.</p>
   </div></div>
@@ -79,7 +86,7 @@ export default function PooledForecast() {
     </select>
    </label>
   </div>
-  {error ? <p role="alert">Couldn’t load the linear forecasts. <button className="forecast-retry" onClick={()=>setAttempt(n=>n+1)}>Retry</button></p>
+  {error ? <p role="alert">Couldn’t load the ridge forecasts. <button className="forecast-retry" onClick={()=>setAttempt(n=>n+1)}>Retry</button></p>
   : !model || projection===null || current===null ? <p role="status">Loading forecasts…</p>
   : <>
    <div className="reg-stats forecast-stats">
@@ -106,18 +113,18 @@ export default function PooledForecast() {
    </section>
    <section className="reg-card forecast-backtest">
     <h2>How well did it predict 2025/26?</h2>
-    <p>Fit on 2024→2025 only, then tested on 2025→2026 across {model.backtest.n} provider transitions. The comparison forecasts each provider’s previous score on the same test rows.</p>
-    <p><strong>{model.backtest.linear.rmse.toFixed(2)} pp</strong> linear model RMSE · <strong>{model.backtest.persistence.rmse.toFixed(2)} pp</strong> previous score RMSE</p>
+    <p>Penalty tuned and model fitted using 2024→2025 only, then tested on 2025→2026 across {model.backtest.n} provider transitions. The comparison forecasts each provider’s previous score on the same test rows.</p>
+    <p><strong>{model.backtest.ridge.rmse.toFixed(2)} pp</strong> ridge RMSE · <strong>{model.backtest.persistence.rmse.toFixed(2)} pp</strong> previous score RMSE</p>
    </section>
    <details className="reg-method">
     <summary>Model specification and coefficients</summary>
     <div>
-     <p>In-sample R² {model.fit.r2.toFixed(3)} · Adjusted R² {model.fit.adjustedR2.toFixed(3)} · {model.fit.clusters} provider clusters</p>
-     <p>Ordinary least squares with an intercept. Each provider-year transition receives equal weight, matched by registration code and tenure. The backtest learns replacement averages from the first transition only. The 2027 forecast uses means from the pooled fit. Missing operational values are filled feature by feature. TP inputs and the training outcome must be present. RP measures apply to rental only.</p>
-     <p>Standard errors are clustered by provider (CR1) to account for repeat observations. The t-statistics are coefficient ÷ standard error, conditional on the filled-in data. Region, housing mix, survey changes and mergers are unadjusted.</p>
+     <p>In-sample R² {model.fit.r2.toFixed(3)} · Ridge λ {Number(model.fit.penalty.toPrecision(3))} · {model.fit.clusters} provider clusters</p>
+     <p>Ridge minimizes mean squared error plus λ times the sum of squared standardized coefficients. The intercept is unpenalized. Five-fold provider-grouped cross-validation on 2024→2025 selects λ, which is then kept fixed when fitting both transitions. Scaling and imputation are learned within each training split. Each provider-year transition receives equal weight, matched by registration code and tenure. The backtest learns replacement averages from the first transition only. The 2027 forecast uses means from the pooled fit. Missing operational values are filled feature by feature. TP inputs and the training outcome must be present. RP measures apply to rental only.</p>
+     <p>Standard errors use a provider-clustered sandwich estimate for the penalized fit. Coefficient ÷ SE is descriptive because ridge shrinks estimates and λ is selected from data. Region, housing mix, survey changes and mergers are unadjusted.</p>
      <div className="forecast-table-wrap">
       <table className="forecast-table">
-       <thead><tr><th scope="col">Predictor</th><th scope="col">Coefficient</th><th scope="col">Clustered SE</th><th scope="col">t-statistic</th><th scope="col">Imputation mean</th><th scope="col">Filled · fit / forecast</th></tr></thead>
+       <thead><tr><th scope="col">Predictor</th><th scope="col">Coefficient</th><th scope="col">Clustered SE</th><th scope="col">Coefficient ÷ SE</th><th scope="col">Imputation mean</th><th scope="col">Filled · fit / forecast</th></tr></thead>
        <tbody>
         {['Intercept',...model.inputs].map((key,i)=>{
          const measure=allMeasures.find(m=>m.key===key);
@@ -126,7 +133,7 @@ export default function PooledForecast() {
           <th scope="row">{measure ? `${key} · ${measure.label} (${measure.unit})` : key}</th>
           <td>{(i===0?model.intercept:model.coefficients[i-1]).toFixed(3)}</td>
           <td>{model.fit.standardErrors[i].toFixed(3)}</td>
-          <td>{model.fit.tStats[i].toFixed(2)}</td>
+          <td>{model.fit.coefficientSERatios[i].toFixed(2)}</td>
           <td>{imputation?.mean.toFixed(2)??'—'}</td>
           <td>{imputation?`${imputation.trainingMissing} / ${imputation.forecastMissing}`:'—'}</td>
          </tr>;
